@@ -10,6 +10,7 @@
 #define VBAT_PIN        A7
 #define TONE_PIN        5
 #define YELLOW_BUTTON_PIN 6
+#define TOUCH_INT_PIN 	9
 #define ONBOARD_LED_PIN 13
 
 #define TONE_FREQ 330
@@ -50,7 +51,8 @@ void setup() {
   heartbeat_last_toggle_time = millis();
 
   /* Standby */
-  energy_saving.begin(WAKE_EXT_INTERRUPT, digitalPinToInterrupt(YELLOW_BUTTON_PIN), ext_int);
+  energy_saving.begin(WAKE_EXT_INTERRUPT, YELLOW_BUTTON_PIN, ext_int);
+  energy_saving.add_external_wakeup_source(TOUCH_INT_PIN, ext_int, FALLING);
 
   touch_sensor.begin(0x5A);
 
