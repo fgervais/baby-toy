@@ -1,5 +1,11 @@
 
+#include <Wire.h>
+#include <Adafruit_MPR121.h>
 #include <EnergySaving.h>
+
+//#define DEBUG
+#define DEBUG_INFO      1
+#define DEBUG_VERBOSE   2
 
 #define VBAT_PIN        A7
 #define TONE_PIN        5
@@ -10,15 +16,24 @@
 
 #define HEATBEAT_TOGGLE_SPEED_MS  1000
 
-#define MAX_IDLE_TIME_MS  5*1000
+#define MAX_IDLE_TIME_MS  30*1000
 
 #define time_after(a,b) \
   ((long)((b) - (a)) < 0)
 
-EnergySaving nrgSave;
+EnergySaving energy_saving;
 unsigned long last_idle_time;
+uint8_t not_idle = 0;
+
+bool tone_playing = false;
+
+Adafruit_MPR121 touch_sensor = Adafruit_MPR121();
+uint16_t last_touched = 0;
+bool touching = false;
+
 unsigned long heartbeat_last_toggle_time;
-boolean tone_playing = false;
+
+int debug_level = DEBUG_INFO;
 
 void ext_int() {
   //sleep_disable();
@@ -28,7 +43,6 @@ void ext_int() {
 void setup() {
   //while (!Serial);
   pinMode(YELLOW_BUTTON_PIN, INPUT_PULLUP);
-  //tone(TONE_PIN, TONE_FREQ);
 
   /* Onboard LED */
   pinMode(ONBOARD_LED_PIN, OUTPUT);
@@ -36,10 +50,22 @@ void setup() {
   heartbeat_last_toggle_time = millis();
 
   /* Standby */
-  nrgSave.begin(WAKE_EXT_INTERRUPT, digitalPinToInterrupt(YELLOW_BUTTON_PIN), ext_int);
-  last_idle_time = millis();
+  energy_saving.begin(WAKE_EXT_INTERRUPT, digitalPinToInterrupt(YELLOW_BUTTON_PIN), ext_int);
+
+  touch_sensor.begin(0x5A);
+
   Serial.print("setup done\n");
 }
+
+#ifdef DEBUG
+void debug(const char *msg, int level) {
+  if(level <= debug_level)
+    Serial.print(msg);
+}
+#else
+  void debug(const char *msg, int level) {
+  }
+#endif
 
 float getVBat() {
   float measuredvbat = analogRead(VBAT_PIN);
@@ -51,15 +77,29 @@ float getVBat() {
   return measuredvbat;
 }
 
-void not_idle() {
-  last_idle_time = millis();
+bool is_idle() {
+  return !not_idle;
+}
+
+void set_idle() {
+  if(not_idle)
+    not_idle--;
+  if(!not_idle)
+    last_idle_time = millis();
+}
+
+void set_not_idle() {
+  not_idle++;
+}
+
+void prepare_to_sleep() {
+  digitalWrite(ONBOARD_LED_PIN, LOW);
 }
 
 void standby_if_idle() {
-  if(time_after(millis(), last_idle_time + MAX_IDLE_TIME_MS)) {
-    digitalWrite(ONBOARD_LED_PIN, LOW);
-    nrgSave.standby();
-    not_idle();
+  if(is_idle() && time_after(millis(), last_idle_time + MAX_IDLE_TIME_MS)) {
+    prepare_to_sleep();
+    energy_saving.standby();
   }
 }
 
@@ -70,52 +110,59 @@ void heartbeat() {
   }
 }
 
+void get_touch_status(uint16_t *touched, uint16_t *released) {
+  uint8_t curr_touched = 0;
+
+  curr_touched = touch_sensor.touched();
+  *touched = ~last_touched & curr_touched;
+  *released = last_touched & ~curr_touched;
+  last_touched = curr_touched;
+
+  if(*touched) {
+    debug("Touched\n", DEBUG_VERBOSE);
+  }
+  else if(*released) {
+    debug("Released\n", DEBUG_VERBOSE);
+  }
+}
+
 void loop() {
-  /*int freq = map(analogRead(A0), 0, 1023, 0, 4096);
-    tone(5, freq);
+  uint16_t touch_start, touch_released;
 
-    Serial.print(freq);
-    Serial.print('\n');
-    delay(1000);*/
+  get_touch_status(&touch_start, &touch_released);
+  if(touch_start) {
+    touching = true;
+  }
+  else if(touch_released) {
+    touching = false;
+  }
 
-  if(!tone_playing && digitalRead(YELLOW_BUTTON_PIN) == LOW) {
+  if(touching) {
+    debug("Touching\n", DEBUG_INFO);
+  }
+  else {
+    debug("!Touching\n", DEBUG_VERBOSE);
+  }
+
+  if(!tone_playing && (digitalRead(YELLOW_BUTTON_PIN) == LOW || touching)) {
+    debug("Start tone\n", DEBUG_INFO);
     tone(TONE_PIN, TONE_FREQ);
-    not_idle();
     tone_playing = true;
+    set_not_idle();
   }
-  else if(tone_playing && digitalRead(YELLOW_BUTTON_PIN) == HIGH){
+  else if(tone_playing && (digitalRead(YELLOW_BUTTON_PIN) == HIGH && !touching)){
+    debug("Stop tone\n", DEBUG_INFO);
     noTone(TONE_PIN);
-    not_idle();
     tone_playing = false;
+    set_idle();
   }
 
-    //nrgSave.standby();  //now mcu goes in standby mode
-    //attachInterrupt(digitalPinToInterrupt(YELLOW_BUTTON_PIN), ext_int, FALLING);
-    //set_sleep_mode(SLEEP_MODE_PWR_DOWN);
-    //system_set_sleepmode(SYSTEM_SLEEPMODE_STANDBY);
-    //noInterrupts();
-    //sleep_bod_disable();
-    //interrupts();
-    //sleep_cpu();
-    /* wake up here */
-    //sleep_disable();
-    /*SCB->SCR |= SCB_SCR_SLEEPDEEP_Msk;
-    __DSB();
-    __WFE();*/
-  //}
-  //else {
-    /*digitalWrite(13, HIGH);   // turn the LED on (HIGH is the voltage level)
-    delay(1000);              // wait for a second
-    digitalWrite(13, LOW);    // turn the LED off by making the voltage LOW
-    delay(1000);              // wait for a second*/
-  //}
-  //Serial.print("Loop\n");
-  
-  /*if(time_after(millis(), last_idle_time + 3000)) {
-    nrgSave.standby();
-    last_idle_time = millis();
-  }*/
+#ifdef DEBUG
+  delay(1000);
+#endif
 
+#ifndef DEBUG
   standby_if_idle();
+#endif
   heartbeat();
 }
